@@ -11,8 +11,6 @@
     <xacro:arg name="has_rl_kit" default="False"/>
     <xacro:arg name="has_realsense" default="False"/>
 
-    <link name="base_link"/>
-
     <link name="body">
         <visual>
             <geometry>
@@ -30,10 +28,11 @@
         </inertial>
     </link>
 
+    <link name="base_link"/>
     <joint name="base_link_joint" type="fixed">
         <origin xyz="0 0 0" rpy="0 0 0" />
-        <parent link="base_link" />
-        <child link="body" />
+        <parent link="body" />
+        <child link="base_link" />
     </joint>
 
     <link name="front_rail"/>

@@ -236,17 +236,22 @@ class SpotROS(Node):
         joint_state = JointStatesToMsg(state.kinematic_state, self.spot_wrapper)
 
         # Add in the virtual joints #
-        virtual_joint_state = GetVirtualJointValues(state.kinematic_state)
-        joint_state.name.extend(virtual_joint_state.name)
-        joint_state.position.extend(virtual_joint_state.position)
-        joint_state.velocity.extend(virtual_joint_state.velocity)
-        joint_state.effort.extend(virtual_joint_state.effort)
+        # throwing away virtual joints
+        # virtual_joint_state = GetVirtualJointValues(state.kinematic_state)
+        # joint_state.name.extend(virtual_joint_state.name)
+        # joint_state.position.extend(virtual_joint_state.position)
+        # joint_state.velocity.extend(virtual_joint_state.velocity)
+        # joint_state.effort.extend(virtual_joint_state.effort)
         
         # TF #
         tf_msg = GetTFFromState(state.kinematic_state, self.spot_wrapper)
 
         self.joint_state_pub.publish(joint_state)
-        if len(tf_msg.transforms) > 0:
+        
+        # removing odom and gpe stuff
+        tf_msg.transforms = [tf for tf in tf_msg.transforms if not (tf.header.frame_id == 'odom' or tf.header.frame_id == 'gpe')]
+        
+        if len(tf_msg.transforms) > 0:            
             self.tf_broadcaster.sendTransform(tf_msg.transforms)
         
         # Odom Twist #
