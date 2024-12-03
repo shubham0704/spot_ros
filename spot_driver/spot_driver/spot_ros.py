@@ -107,7 +107,7 @@ class SpotROS(Node):
         self.status_timer = None
 
         pub_period = 0.1
-        self.status_timer = self.create_timer(pub_period, self.publishStatus)
+        self.status_timer = self.create_timer(0.05, self.publishStatus)
         self.sensors_timer = self.create_timer(pub_period, self.publishSensors)
 
         self.tf_buffer = tf2_ros.Buffer()
