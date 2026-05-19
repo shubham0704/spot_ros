@@ -28,8 +28,12 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 - `docs/plans/VALIDATION-spot_ros-camera-fps.md` — Codex Step 6 review of the Phase 0+1 implementation (verdict: safe to deploy/test on robot for normal RAW operation).
 - `docs/measurements/2026-05-19-phase0-baseline.md` — first on-robot Phase 0 baseline (single RGB stream ~7.5 Hz/10, lat max ~120–131 ms, ~6.9 MB/s). Confirms the 100 ms quantization cliff on hardware and **resolves the Phase 2-vs-3 decision → Phase 2 first** (data-backed).
 
-### Planned — Phase 2 (compressed RGB transport, coexisting)
-- Config flag (default RAW) to request `FORMAT_JPEG` RGB; publish `sensor_msgs/CompressedImage` on `<ns>/image/compressed` alongside RAW. `hand_tof` excluded. Depth stays RAW.
+### Added — Phase 2 (compressed RGB transport) — DONE (review-ready)
+- `SPOT_IMAGE_SERVER_RGB_JPEG` (default OFF = RAW, backward compatible) + `SPOT_IMAGE_SERVER_JPEG_QUALITY` (default 75). When on, RGB sources (≠ `hand_tof`) request `FORMAT_JPEG` and publish `sensor_msgs/CompressedImage` on `<ns>/image/compressed`; depth/service/static-TF stay RAW.
+- `ros_helpers.py`: `getCompressedImageMsg` + extracted shared `_buildTfMsg`/`_buildCameraInfo` (getImageMsg refactored, behavior preserved).
+- Raw-when-JPEG-on is the standard `image_transport republish compressed raw` (no extra robot→driver WiFi); driver does not re-request RAW or embed a decoder.
+- Tests: `spot_driver/tests/test_phase2_jpeg_transport.py` (5 structural + 2 behavior). Suite `10 passed, 4 skipped`.
+- Driven by on-robot data: all-camera run shows a hard ~6 MB/s aggregate WiFi ceiling (`docs/measurements/2026-05-19-phase0-baseline.md`) — compression is the only viable fix.
 
 ### Planned — Phase 3 (due-source batched acquisition)
 - Single batched `get_image_async` over active due sources; per-source `response.status` isolation + failure quarantine. Not built on `AsyncImageService`.

@@ -99,6 +99,57 @@ explicit skip-with-log. Strictly safer.
   source this means that stream goes silent (by design) with a 5s-throttled
   warn — intended over publishing corrupt frames.
 
-**Remaining (later phases):** Phase 2 retargets `publish_requests` RGB →
-`FORMAT_JPEG` + publishes `sensor_msgs/CompressedImage` (coexisting with RAW);
-Phases 3–5 per plan. Phase 2-vs-3 ordering still gated on Phase 0 robot data.
+---
+
+## Phase 2 — Compressed RGB transport — DONE, review-ready
+
+**Data that drove it:** on-robot baseline
+(`docs/measurements/2026-05-19-phase0-baseline.md`) showed a hard ~6 MB/s
+aggregate WiFi ceiling (single stream 7.5 Hz; all-camera collapses to ~3 Hz
+each, latency ~290 ms). Bandwidth-bound confirmed → compression is the only
+viable fix; Phase 3-vs-2 decision closed in favor of Phase 2.
+
+**Changed — `spot_driver/spot_driver/ros_helpers.py`**
+- Extracted `_buildTfMsg` and `_buildCameraInfo`; `getImageMsg` refactored to
+  reuse them (behavior preserved — same encodings/raises; Phase 1 format-guard
+  tests still pass).
+- Added `getCompressedImageMsg(data, lease_manager) -> (CompressedImage,
+  CameraInfo, TFMessage)`: builds a proper `sensor_msgs/CompressedImage`
+  (`format="jpeg"`, raw JPEG bytes passed through) + shared CameraInfo/TF.
+  Raises `UnsupportedImageFormatError` if not FORMAT_JPEG.
+- `from sensor_msgs.msg import ... CompressedImage`.
+
+**Changed — `spot_driver/spot_driver/image_server.py`**
+- Env flags: `SPOT_IMAGE_SERVER_RGB_JPEG` (default OFF = RAW, fully backward
+  compatible) and `SPOT_IMAGE_SERVER_JPEG_QUALITY` (default 75).
+- Build loop: `jpeg_for_this = self._rgb_jpeg and image_source != 'hand_tof'`.
+  When set, only `publish_requests[rgb_source]` is `FORMAT_JPEG`
+  (`quality_percent`). Depth publish + both `service_requests` entries stay
+  RAW (Phase 1 split makes this safe and isolated).
+- `CameraPub(compressed=…)`: when compressed, creates a `CompressedImage`
+  publisher on `<ns>/image/compressed` and **no** raw `Image` publisher;
+  `process_data` routes JPEG via `getCompressedImageMsg`. Raw path unchanged.
+
+**Design decision (user-confirmed):** raw + compressed "both available" is
+honored the ROS-idiomatic way — driver requests JPEG (fixes the measured
+robot→driver WiFi bottleneck), and consumers needing raw run
+`ros2 run image_transport republish compressed raw …` (decode in a dedicated
+process, no extra WiFi). The driver does **not** re-request RAW (that would
+defeat Phase 2) and does **not** embed a decoder (that would fight Phase 5).
+
+**Behavior change:** none with the flag unset (default) — RAW path is
+byte-identical, `getImageMsg` refactor is behavior-preserving. With the flag
+set, RGB sources switch to CompressedImage on a new topic; everything else
+(depth, service, TF, listing) unchanged.
+
+**Tests:** `tests/test_phase2_jpeg_transport.py` — 5 dependency-free
+structural checks (default-off safety, hand_tof exclusion, service/TF maps
+untouched, correct message types) + 2 behavior checks for
+`getCompressedImageMsg`. Full suite: `10 passed, 4 skipped`. `py_compile`
+clean.
+
+**Remaining:** on-robot validation (set `SPOT_IMAGE_SERVER_RGB_JPEG=1`,
+re-run the all-camera fps-debug protocol, confirm aggregate < ~6 MB/s ceiling
+and per-stream ≥ ~8–10 Hz; tune quality if needed). Phases 3–5 likely
+unnecessary given the bandwidth ceiling, but Phase 3 (batching) may still
+reduce latency variance — decide after the Phase 2 on-robot numbers.

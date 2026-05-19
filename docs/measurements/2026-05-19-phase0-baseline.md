@@ -42,8 +42,39 @@ projected bandwidth wall. Phase 3 (batching) does nothing for the measured
 single-stream cliff (1 stream = 1 RPC); it remains the multi-stream
 RPC-fan-out fix and follows. Matches Codex's recommendation, now data-backed.
 
-## Still-open data (non-blocking)
+## All-camera run (captured 2026-05-19, same branch)
 
-An all-cameras + `rosbag record` fps-debug window is still wanted to fix the
-real bandwidth-saturation number for honest Phase 2 success targets. Phase 2
-implementation does not block on it.
+Multiple cameras enabled. Representative steady-state windows:
+
+| Active streams | Per-stream Hz | Lat avg (ms) | Lat max (ms) | **Total MB/s** |
+|---|---|---|---|---|
+| 2 | ~2.3–3.0 | ~280–365 | ~360–520 | **~5.0–5.5** |
+| 3 | ~0.6–3.3 | ~240–300 | ~280–386 | **~5.7–5.9** |
+| 2 (steady) | ~3.0–3.2 | ~240–300 | ~290–460 | **~5.6–6.0** |
+
+(The first `53.9s / 0.0 MB/s / 21 ms` line is a stale startup straggler — the
+accepted Codex "Low"; harmless, windows normalize after.)
+
+### Interpretation — hard bandwidth ceiling
+
+- **Aggregate throughput is capped at ~5.5–6.0 MB/s regardless of stream
+  count.** More cameras do *not* add throughput — the same ~6 MB/s is split
+  across them, so each collapses to ~2.5–3.2 Hz. Classic saturation signature.
+- Latency inflates ~4× under contention (~290 ms avg vs ~75 ms single-stream)
+  → every stream sits far past the 100 ms tick → hard-quantized.
+- Only 2–3 of the configured streams are "active" per window (gate +
+  subscriber churn round-robins them); 14 concurrent never happens.
+- Effective ceiling ≈ **~6 MB/s aggregate (~48 Mbps)**. RAW 14×10 Hz needs
+  ~50–100 MB/s — **~10× over the ceiling**.
+
+### Consequences (locked)
+
+- **Phase 2 (JPEG/compressed) is the ONLY viable fix.** Phase 3 batching alone
+  cannot help — you cannot push 50 MB/s through a 6 MB/s pipe by reducing RPC
+  count. Phases 4/5 are likely unnecessary once Phase 2 lands.
+- **Honest Phase 2 success target:** per-frame RAW ≈ ~0.9 MB. To fit 14
+  streams×10 Hz (=140 fps) under ~6 MB/s needs ≤ ~43 KB/frame. JPEG q≤75 on
+  Spot fisheye ≈ 30–80 KB → feasible-to-borderline. So the criterion is
+  *"compressed brings aggregate under the ~6 MB/s ceiling and per-stream rate
+  to ≥ ~8–10 Hz at q≤75, validated on robot"* — NOT a guaranteed flat 10 Hz
+  on all 14 until measured. Tune `SPOT_IMAGE_SERVER_JPEG_QUALITY` if needed.

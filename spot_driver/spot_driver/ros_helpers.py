@@ -38,7 +38,7 @@ from builtin_interfaces.msg import Duration as ROSDuration
 from geometry_msgs.msg import (PoseWithCovariance, TransformStamped, TwistWithCovarianceStamped, 
                                Vector3, Twist, Quaternion, Transform, Pose, Point)
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from sensor_msgs.msg import JointState
 from sensor_msgs.msg import PointCloud2, PointField
 from tf2_msgs.msg import TFMessage
@@ -274,6 +274,67 @@ class UnsupportedImageFormatError(Exception):
     frame. See docs/plans/PLAN-spot_ros-camera-fps.md (Phase 1)."""
 
 
+def _buildTfMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> TFMessage:
+    """Transforms snapshot -> TFMessage. Shared by raw and compressed paths."""
+    transforms = []
+    for child_frame, transform in data.shot.transforms_snapshot.child_to_parent_edge_map.items():
+        if not transform.parent_frame_name:
+            continue
+        transforms.append(populateTransformStamped(
+            time=TimestampToMsg(lease_manager.robotToLocalTime(data.shot.acquisition_time)),
+            parent_frame=transform.parent_frame_name,
+            child_frame=child_frame,
+            transform=SE3Pose.from_proto(transform.parent_tform_child)
+        ))
+    return TFMessage(transforms=transforms)
+
+
+def _buildCameraInfo(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> CameraInfo:
+    """Pinhole intrinsics -> CameraInfo. Identical for raw and compressed
+    (intrinsics are independent of pixel encoding)."""
+    camera_info_msg = CameraInfo(d=[0.0]*5,
+                                 distortion_model="plumb_bob",
+                                 k=[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0],
+                                 r=[1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0],
+                                 p=[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0])
+    local_time = lease_manager.robotToLocalTime(data.shot.acquisition_time)
+    camera_info_msg.header.stamp = ROSTime(sec=local_time.seconds, nanosec=local_time.nanos)
+    camera_info_msg.header.frame_id = data.shot.frame_name_image_sensor
+    camera_info_msg.height = data.shot.image.rows
+    camera_info_msg.width = data.shot.image.cols
+
+    camera_info_msg.k[0] = data.source.pinhole.intrinsics.focal_length.x
+    camera_info_msg.k[2] = data.source.pinhole.intrinsics.principal_point.x
+    camera_info_msg.k[4] = data.source.pinhole.intrinsics.focal_length.y
+    camera_info_msg.k[5] = data.source.pinhole.intrinsics.principal_point.y
+
+    camera_info_msg.p[0] = data.source.pinhole.intrinsics.focal_length.x
+    camera_info_msg.p[2] = data.source.pinhole.intrinsics.principal_point.x
+    camera_info_msg.p[5] = data.source.pinhole.intrinsics.focal_length.y
+    camera_info_msg.p[6] = data.source.pinhole.intrinsics.principal_point.y
+    return camera_info_msg
+
+
+def getCompressedImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tuple[CompressedImage, CameraInfo, TFMessage]:
+    """JPEG ImageResponse -> sensor_msgs/CompressedImage (the CORRECT message
+    type for JPEG; cf. the Phase 1 guard that rejects JPEG-as-Image).
+
+    Returns (CompressedImage, CameraInfo, TFMessage). Raises
+    UnsupportedImageFormatError if the response is not FORMAT_JPEG."""
+    if data.shot.image.format != image_pb2.Image.FORMAT_JPEG:
+        raise UnsupportedImageFormatError(
+            f"Source '{data.source.name}': getCompressedImageMsg expects "
+            f"FORMAT_JPEG, got format {data.shot.image.format}.")
+    tf_msg = _buildTfMsg(data, lease_manager)
+    cimg = CompressedImage()
+    local_time = lease_manager.robotToLocalTime(data.shot.acquisition_time)
+    cimg.header.stamp = ROSTime(sec=local_time.seconds, nanosec=local_time.nanos)
+    cimg.header.frame_id = data.shot.frame_name_image_sensor
+    cimg.format = "jpeg"
+    cimg.data = data.shot.image.data
+    return cimg, _buildCameraInfo(data, lease_manager), tf_msg
+
+
 def getImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tuple[Image, CameraInfo, TFMessage]:
     """Takes the image, camera, and TF data and populates the necessary ROS messages
 
@@ -286,17 +347,7 @@ def getImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tu
             * CameraInfo: message to define the state and config of the camera that took the image
             * TFMessage: with the transforms necessary to locate the image frames
     """
-    transforms = []
-    for child_frame, transform in data.shot.transforms_snapshot.child_to_parent_edge_map.items():
-        if not transform.parent_frame_name:
-            continue
-        transforms.append(populateTransformStamped(
-            time=TimestampToMsg(lease_manager.robotToLocalTime(data.shot.acquisition_time)),
-            parent_frame=transform.parent_frame_name,
-            child_frame=child_frame,
-            transform=SE3Pose.from_proto(transform.parent_tform_child)
-        ))
-    tf_msg = TFMessage(transforms=transforms)
+    tf_msg = _buildTfMsg(data, lease_manager)
 
     image_msg = Image()
     local_time = lease_manager.robotToLocalTime(data.shot.acquisition_time)

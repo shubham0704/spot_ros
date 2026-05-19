@@ -17,7 +17,7 @@ from rclpy.time import Time
 from std_srvs.srv import Trigger
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from tf2_ros import StaticTransformBroadcaster
 
 from bosdyn.api import image_pb2
@@ -29,32 +29,47 @@ from bosdyn.client.frame_helpers import get_a_tform_b, BODY_FRAME_NAME, HAND_FRA
 from spot_msgs.srv import GetImages
 from spot_driver.image_server_parameters import spot_driver_parameters
 
-from .ros_helpers import getImageMsg, populateTransformStamped, TimestampToMsg, UnsupportedImageFormatError
+from .ros_helpers import getImageMsg, getCompressedImageMsg, populateTransformStamped, TimestampToMsg, UnsupportedImageFormatError
 from .spot_body_wrapper import SpotLeaseManager
 from .type_hint_helpers import *
 
 """ Class for managing camera publishing """
 class CameraPub():
-    def __init__(self, parent: SpotImageServer, namespace: str):
+    def __init__(self, parent: SpotImageServer, namespace: str, compressed: bool = False):
         self.parent = parent
         self.lease_manager = parent.lease_manager
-        self.image_pub = parent.create_publisher(Image, '~/' + namespace + '/image', qos_profile=qos_profile_sensor_data) # BEST_EFFORT reliability
+        self.compressed = compressed
         self.info_pub = parent.create_publisher(CameraInfo, '~/' + namespace + '/camera_info', qos_profile=qos_profile_sensor_data)
+        if compressed:
+            # Phase 2: source requested FORMAT_JPEG -> publish the CORRECT
+            # message type. Consumers needing raw use the standard
+            # `image_transport republish compressed raw` node (no extra
+            # robot->driver WiFi cost). No raw Image publisher here.
+            self.image_pub = None
+            self.compressed_pub = parent.create_publisher(CompressedImage, '~/' + namespace + '/image/compressed', qos_profile=qos_profile_sensor_data)
+        else:
+            self.image_pub = parent.create_publisher(Image, '~/' + namespace + '/image', qos_profile=qos_profile_sensor_data) # BEST_EFFORT reliability
+            self.compressed_pub = None
 
     def process_data(self, data: ImageResponseProto):
-        # Publish both if either image or camera info has subscribers (necessary for nodes like Apriltag)
-        has_subscribers = (self.image_pub.get_subscription_count() > 0 or 
-                          self.info_pub.get_subscription_count() > 0)
-        
+        # Publish if either the image (raw or compressed) or camera info has
+        # subscribers (necessary for nodes like Apriltag).
+        img_pub = self.compressed_pub if self.compressed else self.image_pub
+        has_subscribers = (img_pub.get_subscription_count() > 0 or
+                           self.info_pub.get_subscription_count() > 0)
+
         if has_subscribers:
             try:
-                image_msg, camera_info_msg, _ = getImageMsg(data, self.lease_manager)
+                if self.compressed:
+                    image_msg, camera_info_msg, _ = getCompressedImageMsg(data, self.lease_manager)
+                else:
+                    image_msg, camera_info_msg, _ = getImageMsg(data, self.lease_manager)
             except UnsupportedImageFormatError as e:
-                # Never publish a malformed/partial Image; skip this frame.
+                # Never publish a malformed/partial message; skip this frame.
                 self.parent.get_logger().warn(
                     f'Skipping frame: {e}', throttle_duration_sec=5.0)
                 return
-            self.image_pub.publish(image_msg)
+            img_pub.publish(image_msg)
             self.info_pub.publish(camera_info_msg)
 
 class SpotImageServer(Node):
@@ -120,6 +135,27 @@ class SpotImageServer(Node):
                 f'Summary every {self._fps_window_sec:.1f}s.')
         # ----------------------------------------------------------------------
 
+        # --- Phase 2: opt-in compressed RGB transport (default OFF = RAW) ------
+        # On the robot the bottleneck is the robot->driver gRPC-over-WiFi hop
+        # (measured ~6 MB/s aggregate ceiling, RAW). Requesting FORMAT_JPEG
+        # makes the robot encode onboard and send ~10-20x fewer bytes.
+        # RGB sources (except hand_tof, which is ToF not RGB) then publish a
+        # proper sensor_msgs/CompressedImage on <ns>/image/compressed. Depth,
+        # the GetImages service, and static-TF stay RAW (Phase 1 split).
+        # Consumers needing raw use `image_transport republish compressed raw`.
+        self._rgb_jpeg = os.environ.get('SPOT_IMAGE_SERVER_RGB_JPEG', '') \
+            not in ('', '0', 'false', 'False', 'no', 'off')
+        try:
+            self._jpeg_quality = int(os.environ.get('SPOT_IMAGE_SERVER_JPEG_QUALITY', '75'))
+        except ValueError:
+            self._jpeg_quality = 75
+        if self._rgb_jpeg:
+            self.get_logger().warn(
+                f'[phase2] RGB JPEG transport ENABLED (quality={self._jpeg_quality}). '
+                'RGB sources publish sensor_msgs/CompressedImage on '
+                '<ns>/image/compressed; hand_tof/depth/service/static-TF stay RAW.')
+        # ----------------------------------------------------------------------
+
         self.get_logger().info('Creating publishers:')
         for image_source in self.params.image_sources:
             
@@ -135,17 +171,24 @@ class SpotImageServer(Node):
             self.service_requests[rgb_source] = build_image_request(rgb_source, image_format=image_pb2.Image.FORMAT_RAW, pixel_format=rgb_pixel_format)
             self.service_requests[depth_source] = build_image_request(depth_source, image_format=image_pb2.Image.FORMAT_RAW)
 
-            # Periodic-publish requests: distinct objects (RAW in Phase 1).
-            # Phase 2 will retarget the RGB entry here to FORMAT_JPEG; depth
-            # stays RAW. hand_tof is excluded from JPEG (Phase 2).
-            self.publish_requests[rgb_source] = build_image_request(rgb_source, image_format=image_pb2.Image.FORMAT_RAW, pixel_format=rgb_pixel_format)
+            # Periodic-publish requests. Phase 2: when RGB-JPEG is enabled, the
+            # RGB entry is requested as FORMAT_JPEG (robot encodes onboard).
+            # hand_tof is ToF not RGB -> excluded. Depth always RAW. The
+            # service/static-TF maps above are untouched (stay RAW).
+            jpeg_for_this = self._rgb_jpeg and image_source != 'hand_tof'
+            if jpeg_for_this:
+                self.publish_requests[rgb_source] = build_image_request(
+                    rgb_source, image_format=image_pb2.Image.FORMAT_JPEG,
+                    quality_percent=self._jpeg_quality, pixel_format=rgb_pixel_format)
+            else:
+                self.publish_requests[rgb_source] = build_image_request(rgb_source, image_format=image_pb2.Image.FORMAT_RAW, pixel_format=rgb_pixel_format)
             self.publish_requests[depth_source] = build_image_request(depth_source, image_format=image_pb2.Image.FORMAT_RAW)
 
             rgb_rate = self.params.rates.get_entry(image_source).rgb
             depth_rate = self.params.rates.get_entry(image_source).depth
 
             if rgb_rate > 0:
-                self.camera_pubs[rgb_source] = CameraPub(self, 'rgb/' + image_source)
+                self.camera_pubs[rgb_source] = CameraPub(self, 'rgb/' + image_source, compressed=jpeg_for_this)
                 self.callback_groups.append(MutuallyExclusiveCallbackGroup())
                 self.publish_timers.append(
                     self.create_timer(1/rgb_rate, lambda source=rgb_source: self.update_image_task(source), callback_group=self.callback_groups[-1])
