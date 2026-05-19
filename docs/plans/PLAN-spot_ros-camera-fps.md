@@ -76,9 +76,9 @@ Opt-in (default-off) logging of per-batch SDK round-trip latency, achieved Hz/so
 6. `getImageMsg` zero-copies `data` by reference; worker decoupling must avoid buffer lifetime bugs.
 7. Depth-RAW may remain the dominant bandwidth term even after RGB JPEG.
 
-## Open decision for principal
+## Open decision for principal — RESOLVED 2026-05-19
 
-- **Phase 2 vs Phase 3 first:** Codex recommends compression before batching (cut payload before optimizing scheduling). Plan reflects this. Alternative: do Phase 3 batching first if Phase 0 shows the bottleneck is RPC-count/latency, not raw bandwidth. **Decision deferred to principal after Phase 0 data** — flagged here rather than pre-committed.
+- **Phase 2 vs Phase 3 first: RESOLVED → Phase 2 first.** On-robot Phase 0 baseline (`docs/measurements/2026-05-19-phase0-baseline.md`) shows a single RGB stream at ~7.5 Hz (target 10), latency avg ~75 ms / max ~120–131 ms, ~6.9 MB/s. The 100 ms quantization cliff is confirmed on hardware; the single-stream bottleneck is latency-variance, and the ~14-stream rosbag case projects to ~50–100 MB/s (also bandwidth-bound). Compression fixes both; batching does nothing for the measured single-stream cliff. Decision matches Codex's recommendation, now data-backed.
 
 ## References
 

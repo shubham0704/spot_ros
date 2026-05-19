@@ -26,6 +26,7 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 
 ### Added
 - `docs/plans/VALIDATION-spot_ros-camera-fps.md` — Codex Step 6 review of the Phase 0+1 implementation (verdict: safe to deploy/test on robot for normal RAW operation).
+- `docs/measurements/2026-05-19-phase0-baseline.md` — first on-robot Phase 0 baseline (single RGB stream ~7.5 Hz/10, lat max ~120–131 ms, ~6.9 MB/s). Confirms the 100 ms quantization cliff on hardware and **resolves the Phase 2-vs-3 decision → Phase 2 first** (data-backed).
 
 ### Planned — Phase 2 (compressed RGB transport, coexisting)
 - Config flag (default RAW) to request `FORMAT_JPEG` RGB; publish `sensor_msgs/CompressedImage` on `<ns>/image/compressed` alongside RAW. `hand_tof` excluded. Depth stays RAW.
