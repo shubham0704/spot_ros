@@ -148,6 +148,23 @@ untouched, correct message types) + 2 behavior checks for
 `getCompressedImageMsg`. Full suite: `10 passed, 4 skipped`. `py_compile`
 clean.
 
+**Post-review fixes (Codex Phase 2, commit after `29749c7`):**
+- **HIGH (deploy-blocker, fixed):** `update_image_task` dereferenced
+  `image_pub` which is `None` in compressed mode → every JPEG RGB tick
+  `AttributeError`. Added `CameraPub.active_pub` property; both
+  `update_image_task` and `process_data` use it. Regression test added.
+- **MEDIUM:** `CompressedImage.format` → conventional
+  `"rgb8; jpeg compressed bgr8"` so `image_transport republish` preserves the
+  rgb8 contract (on-robot channel-order check noted).
+- **MEDIUM:** startup warning now states raw `<ns>/image` is NOT published for
+  RGB and names AprilTag / camera_pointclouds / `CameraClient` + republish
+  recipe.
+- **LOW:** JPEG quality clamped to [1,100] with warning.
+- **Doc/DRY:** `getImageMsg` now actually calls `_buildCameraInfo` (inline
+  duplicate removed — IMPL claim is now true); measurements doc split into
+  RGB-compressed vs RGB+depth cases.
+Full review + resolutions: `docs/plans/VALIDATION-spot_ros-camera-fps.md`.
+
 **Remaining:** on-robot validation (set `SPOT_IMAGE_SERVER_RGB_JPEG=1`,
 re-run the all-camera fps-debug protocol, confirm aggregate < ~6 MB/s ceiling
 and per-stream ≥ ~8–10 Hz; tune quality if needed). Phases 3–5 likely

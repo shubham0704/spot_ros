@@ -51,10 +51,17 @@ class CameraPub():
             self.image_pub = parent.create_publisher(Image, '~/' + namespace + '/image', qos_profile=qos_profile_sensor_data) # BEST_EFFORT reliability
             self.compressed_pub = None
 
+    @property
+    def active_pub(self):
+        """The image publisher actually in use (raw or compressed). MUST be
+        used everywhere instead of .image_pub directly — .image_pub is None in
+        compressed mode (Codex Phase 2 review: HIGH)."""
+        return self.compressed_pub if self.compressed else self.image_pub
+
     def process_data(self, data: ImageResponseProto):
         # Publish if either the image (raw or compressed) or camera info has
         # subscribers (necessary for nodes like Apriltag).
-        img_pub = self.compressed_pub if self.compressed else self.image_pub
+        img_pub = self.active_pub
         has_subscribers = (img_pub.get_subscription_count() > 0 or
                            self.info_pub.get_subscription_count() > 0)
 
@@ -149,11 +156,25 @@ class SpotImageServer(Node):
             self._jpeg_quality = int(os.environ.get('SPOT_IMAGE_SERVER_JPEG_QUALITY', '75'))
         except ValueError:
             self._jpeg_quality = 75
+        # Clamp to the Spot SDK accepted range [1, 100] (Codex Phase 2: low).
+        if not 1 <= self._jpeg_quality <= 100:
+            self.get_logger().warn(
+                f'[phase2] SPOT_IMAGE_SERVER_JPEG_QUALITY={self._jpeg_quality} '
+                'out of range; clamping to [1, 100].')
+            self._jpeg_quality = min(100, max(1, self._jpeg_quality))
         if self._rgb_jpeg:
             self.get_logger().warn(
                 f'[phase2] RGB JPEG transport ENABLED (quality={self._jpeg_quality}). '
                 'RGB sources publish sensor_msgs/CompressedImage on '
-                '<ns>/image/compressed; hand_tof/depth/service/static-TF stay RAW.')
+                '~/<ns>/image/compressed ONLY. The raw ~/<ns>/image topic is '
+                'NOT published for RGB sources, so these consumers will NOT '
+                'receive RGB until you run an image_transport republisher: '
+                'AprilTag (spot_apriltag), pointcloud texture '
+                '(camera_pointclouds), and spot_utils::CameraClient. '
+                'Recovery: `ros2 run image_transport republish compressed raw '
+                '--ros-args -r in/compressed:=<ns>/image/compressed '
+                '-r out:=<ns>/image`. Depth, GetImages service, and '
+                'static-TF remain RAW.')
         # ----------------------------------------------------------------------
 
         self.get_logger().info('Creating publishers:')
@@ -230,7 +251,8 @@ class SpotImageServer(Node):
     def update_image_task(self, source_name: str) -> None:
         if source_name not in self.image_response_futures or self.image_response_futures[source_name].done():
             # Do not make requests on images topics that no one is listening to
-            is_active_topic = self.camera_pubs[source_name].image_pub.get_subscription_count() > 0 or self.camera_pubs[source_name].info_pub.get_subscription_count() > 0
+            cam_pub = self.camera_pubs[source_name]
+            is_active_topic = cam_pub.active_pub.get_subscription_count() > 0 or cam_pub.info_pub.get_subscription_count() > 0
             if not is_active_topic: return
             
             # Record the send time BEFORE the future exists / its callback is

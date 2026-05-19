@@ -78,3 +78,16 @@ accepted Codex "Low"; harmless, windows normalize after.)
   *"compressed brings aggregate under the ~6 MB/s ceiling and per-stream rate
   to ≥ ~8–10 Hz at q≤75, validated on robot"* — NOT a guaranteed flat 10 Hz
   on all 14 until measured. Tune `SPOT_IMAGE_SERVER_JPEG_QUALITY` if needed.
+
+### Two distinct validation cases (Codex Phase 2: low)
+
+Phase 2 compresses **RGB only**; depth stays RAW by design. So the ~6 MB/s
+target must be evaluated in two cases, not conflated:
+
+1. **RGB-compressed** (RGB JPEG, depth/rates off or low): the ≤~43 KB/frame /
+   ≥~8–10 Hz target above applies directly. This is the Phase 2 success gate.
+2. **RGB+depth `publish_all_images.yaml`** (all depth still RAW at 10 Hz):
+   depth RAW alone can still saturate the ~6 MB/s pipe regardless of RGB
+   compression — the PLAN already flags this. Phase 2 is *not* expected to
+   make this case hit 10 Hz; depth-side bandwidth is out of Phase 2 scope
+   (future: depth rate limiting / decimation / its own transport).

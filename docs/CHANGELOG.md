@@ -35,6 +35,13 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 - Tests: `spot_driver/tests/test_phase2_jpeg_transport.py` (5 structural + 2 behavior). Suite `10 passed, 4 skipped`.
 - Driven by on-robot data: all-camera run shows a hard ~6 MB/s aggregate WiFi ceiling (`docs/measurements/2026-05-19-phase0-baseline.md`) — compression is the only viable fix.
 
+### Fixed — post-Codex-review (Phase 2)
+- **HIGH deploy-blocker:** `update_image_task` dereferenced `image_pub` (None in compressed mode) → JPEG path crashed every tick. Added `CameraPub.active_pub`; used in both gate + publish. Regression test added.
+- **MEDIUM:** `CompressedImage.format` → conventional `"rgb8; jpeg compressed bgr8"` (republish preserves rgb8).
+- **MEDIUM:** startup warning now names broken raw consumers (AprilTag/pointcloud/`CameraClient`) + republish recipe.
+- **LOW:** JPEG quality clamped to [1,100]. **DRY:** `getImageMsg` reuses `_buildCameraInfo`. Measurements doc splits RGB-compressed vs RGB+depth success cases.
+- Review + resolutions: `docs/plans/VALIDATION-spot_ros-camera-fps.md` (Phase 2 section). Suite `13 passed, 4 skipped`.
+
 ### Planned — Phase 3 (due-source batched acquisition)
 - Single batched `get_image_async` over active due sources; per-source `response.status` isolation + failure quarantine. Not built on `AsyncImageService`.
 

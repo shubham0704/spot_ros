@@ -84,3 +84,80 @@ authoritative.
 Ran the dependency-free request-map test: `5 passed`. Phase 0 and
 format-guard modules skipped (ROS/bosdyn deps unavailable in that session):
 `2 skipped`. Matches local results.
+
+---
+
+# VALIDATION: Codex review of Phase 2 implementation
+
+Reviewer: Codex (gpt-5.5, xhigh)
+Date: 2026-05-19
+Reviewed diff: `b90065a..29749c7`
+Provenance: read-only sandbox blocked Codex's append; transcribed from stdout
+by Claude (see [[feedback-codex-exec-gotchas]]). Resolutions appended per item.
+
+## Findings & resolutions
+
+### HIGH — `update_image_task` dereferences `image_pub=None` in compressed mode — FIXED
+`CameraPub` sets `self.image_pub = None` for compressed RGB, but
+`update_image_task`'s subscriber gate still called
+`self.camera_pubs[src].image_pub.get_subscription_count()`
+(`image_server.py:233`). With `SPOT_IMAGE_SERVER_RGB_JPEG=1` every JPEG RGB
+tick would `AttributeError` before `get_image_async` → Phase 2 entirely
+non-functional. The Phase 2 AST test missed it (only checked `process_data`).
+**Verified directly.** **Resolution:** added `CameraPub.active_pub` property
+(returns `compressed_pub` if compressed else `image_pub`); both
+`update_image_task` and `process_data` now use it. Added a structural test
+that fails if `update_image_task` dereferences `.image_pub` directly.
+
+### MEDIUM — `CompressedImage.format="jpeg"` too weak for `image_transport republish` — FIXED
+ROS convention is `ORIG_PIXFMT; CODEC compressed [COMPRESSED_PIXFMT]`; a bare
+`"jpeg"` may make a raw republisher emit `bgr8` instead of the original
+`rgb8`. **Resolution:** format set to `"rgb8; jpeg compressed bgr8"` (the
+conventional string); on-robot channel-order validation noted as a caveat in
+the measurements doc.
+
+### MEDIUM — JPEG-on silently removes raw `<ns>/image`; AprilTag/pointcloud/CameraClient break — MITIGATED
+Design (driver requests JPEG; raw via external `image_transport republish`)
+confirmed sound for the measured bottleneck. But the startup warning didn't
+say raw RGB topics disappear or name affected consumers. **Resolution:**
+startup warning strengthened to explicitly state raw `<ns>/image` is NOT
+published for RGB sources and to name AprilTag / pointcloud-texture /
+`spot_utils::CameraClient`, with the `republish` recipe. Launch-level
+auto-republisher recorded as a follow-up (not blocking; default stays off).
+
+### LOW — JPEG quality not range-validated — FIXED
+`SPOT_IMAGE_SERVER_JPEG_QUALITY` was parsed but unclamped. **Resolution:**
+clamped to [1,100] with a startup warning on out-of-range.
+
+### LOW — success criteria realistic only for compressed RGB, not RGB+depth — FIXED (docs)
+Depth stays RAW (correct), so the ~6 MB/s target applies to the RGB-compressed
+case, not `publish_all_images.yaml` with all depth at 10 Hz. **Resolution:**
+measurements doc split into "RGB compressed" vs "RGB+depth publish_all" cases.
+
+### Confirmation correction — `getImageMsg` still had an inline CameraInfo duplicate — FIXED
+Codex noted the IMPL claim that `getImageMsg` reuses `_buildCameraInfo` was
+untrue (inline duplicate remained). **Resolution:** `getImageMsg` now actually
+calls `_buildCameraInfo` (DRY completed; behavior preserved — Phase 1
+format-guard tests cover the RAW encodings/raises).
+
+## Codex confirmations (no action)
+
+- `getImageMsg` RAW behavior preserved (mono8/rgb8/rgba8/mono16/16UC1; JPEG /
+  unhandled-pixel-format / unknown still raise). `_buildTfMsg` preserves filter
+  + iteration order.
+- Robot-ignores-JPEG → `getCompressedImageMsg` raises → `process_data` skips
+  with 5 s-throttled warn: safe/visible (stream goes silent).
+- Request isolation intact: only `publish_requests[rgb]` → JPEG; depth +
+  service + static-TF stay RAW; `hand_tof` excluded.
+- Flag unset ⇒ behavior equivalent to Phase 1 (RAW path byte-identical).
+- Compressed QoS = same BEST_EFFORT sensor profile; validate rosbag2 QoS on
+  robot.
+- No new thread-safety issue.
+
+## Verdict (Codex)
+
+> Do not deploy Phase 2 as-is: compressed RGB acquisition is blocked by the
+> `image_pub=None` dereference in `update_image_task`. After that fix, the
+> request-map isolation and raw-default compatibility look correct.
+
+Deploy-blocker (HIGH) is now fixed; all other items resolved or mitigated.

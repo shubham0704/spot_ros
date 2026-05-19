@@ -330,7 +330,12 @@ def getCompressedImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseMana
     local_time = lease_manager.robotToLocalTime(data.shot.acquisition_time)
     cimg.header.stamp = ROSTime(sec=local_time.seconds, nanosec=local_time.nanos)
     cimg.header.frame_id = data.shot.frame_name_image_sensor
-    cimg.format = "jpeg"
+    # Follow the compressed_image_transport convention
+    # "ORIG_PIXFMT; CODEC compressed COMPRESSED_PIXFMT" so a standard
+    # `image_transport republish compressed raw` reconstructs the original
+    # rgb8 contract rather than falling back to bgr8 (Codex Phase 2: medium).
+    # On-robot channel-order validation noted in the measurements doc.
+    cimg.format = "rgb8; jpeg compressed bgr8"
     cimg.data = data.shot.image.data
     return cimg, _buildCameraInfo(data, lease_manager), tf_msg
 
@@ -426,29 +431,8 @@ def getImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tu
             f"Source '{source_name}': unsupported image format "
             f"{data.shot.image.format}.")
 
-    camera_info_msg = CameraInfo(d=[0.0]*5,
-                                 distortion_model="plumb_bob",
-                                 k=[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0],
-                                 r=[1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0],
-                                 p=[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0])
-
-    local_time = lease_manager.robotToLocalTime(data.shot.acquisition_time)
-    camera_info_msg.header.stamp = ROSTime(sec=local_time.seconds, nanosec=local_time.nanos)
-    camera_info_msg.header.frame_id = data.shot.frame_name_image_sensor
-    camera_info_msg.height = data.shot.image.rows
-    camera_info_msg.width = data.shot.image.cols
-
-    camera_info_msg.k[0] = data.source.pinhole.intrinsics.focal_length.x
-    camera_info_msg.k[2] = data.source.pinhole.intrinsics.principal_point.x
-    camera_info_msg.k[4] = data.source.pinhole.intrinsics.focal_length.y
-    camera_info_msg.k[5] = data.source.pinhole.intrinsics.principal_point.y
-
-    camera_info_msg.p[0] = data.source.pinhole.intrinsics.focal_length.x
-    camera_info_msg.p[2] = data.source.pinhole.intrinsics.principal_point.x
-    camera_info_msg.p[5] = data.source.pinhole.intrinsics.focal_length.y
-    camera_info_msg.p[6] = data.source.pinhole.intrinsics.principal_point.y
-
-    return image_msg, camera_info_msg, tf_msg
+    # Reuse the shared builder (DRY; same construction as the compressed path).
+    return image_msg, _buildCameraInfo(data, lease_manager), tf_msg
 
 def PointCloudToMsg(pointcloud_response: PointCloudResponseProto,
                     lease_manager: SpotLeaseManager) -> PointCloud2:

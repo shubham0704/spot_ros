@@ -48,8 +48,32 @@ def test_compressed_camerapub_publishes_compressedimage_not_image():
 
 def test_compressed_converter_exists_and_typed():
     assert "def getCompressedImageMsg(" in _HLP
-    assert 'cimg.format = "jpeg"' in _HLP
+    # Conventional compressed_image_transport format string (Codex P2 medium),
+    # NOT a bare "jpeg" which can make republish fall back to bgr8.
+    assert 'cimg.format = "rgb8; jpeg compressed bgr8"' in _HLP
     assert "raise UnsupportedImageFormatError(" in _HLP  # rejects non-JPEG
+
+
+def test_no_direct_image_pub_deref_in_active_paths():
+    """Regression for Codex Phase 2 HIGH: image_pub is None in compressed
+    mode, so update_image_task / process_data must go through active_pub."""
+    assert "@property" in _IMG and "def active_pub(self):" in _IMG
+    # The subscriber gate must not dereference .image_pub directly.
+    assert ".image_pub.get_subscription_count()" not in _IMG
+    assert "cam_pub.active_pub.get_subscription_count()" in _IMG
+    assert "img_pub = self.active_pub" in _IMG
+
+
+def test_startup_warning_names_broken_consumers():
+    # JPEG-on must loudly state raw topics vanish and name the consumers.
+    assert "image_transport republish compressed raw" in _IMG
+    for consumer in ("AprilTag", "camera_pointclouds", "CameraClient"):
+        assert consumer in _IMG
+
+
+def test_jpeg_quality_is_clamped():
+    assert "1 <= self._jpeg_quality <= 100" in _IMG
+    assert "min(100, max(1, self._jpeg_quality))" in _IMG
 
 
 # ---- behavior (needs ROS/bosdyn) -----------------------------------------
