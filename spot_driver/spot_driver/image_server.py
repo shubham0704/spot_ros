@@ -3,6 +3,11 @@
 from __future__ import annotations
 from asyncio import Future, InvalidStateError
 
+import os
+import time
+import threading
+from collections import defaultdict
+
 import rclpy
 import rclpy.logging
 from rclpy.qos import qos_profile_sensor_data
@@ -80,6 +85,26 @@ class SpotImageServer(Node):
         self.publish_timers: list[Timer] = []
         self.image_response_futures: dict[str, Future] = {}
 
+        # --- Phase 0 measurement harness (opt-in, default OFF) -----------------
+        # Enable with env SPOT_IMAGE_SERVER_FPS_DEBUG=1. Logging only: no request,
+        # threading, or publish behavior changes. Measures per-source SDK
+        # round-trip latency, achieved Hz, and bytes/s so we can classify the
+        # bottleneck (latency-bound vs WiFi-bandwidth-bound) before later phases.
+        self._fps_debug = os.environ.get('SPOT_IMAGE_SERVER_FPS_DEBUG', '') \
+            not in ('', '0', 'false', 'False', 'no', 'off')
+        if self._fps_debug:
+            self._fps_lock = threading.Lock()
+            self._fps_send_times: dict[str, float] = {}
+            self._fps_stats: dict[str, dict] = defaultdict(self._fps_new_bucket)
+            self._fps_window_start = time.monotonic()
+            self._fps_window_sec = float(
+                os.environ.get('SPOT_IMAGE_SERVER_FPS_DEBUG_WINDOW', '5.0'))
+            self.get_logger().warn(
+                '[fps-debug] Phase-0 instrumentation ENABLED via '
+                'SPOT_IMAGE_SERVER_FPS_DEBUG. Logging only; no behavior change. '
+                f'Summary every {self._fps_window_sec:.1f}s.')
+        # ----------------------------------------------------------------------
+
         self.get_logger().info('Creating publishers:')
         for image_source in self.params.image_sources:
             
@@ -144,10 +169,15 @@ class SpotImageServer(Node):
             
             self.image_response_futures[source_name] = self.image_client.get_image_async([self.image_requests[source_name]])
             self.image_response_futures[source_name].add_done_callback(self.publish_image_callback)
+            if self._fps_debug:
+                with self._fps_lock:
+                    self._fps_send_times[source_name] = time.monotonic()
 
     def publish_image_callback(self, response_future: Future):
         try:
             response: ImageResponseProto = response_future.result()[0]
+            if self._fps_debug:
+                self._fps_record(response)
             self.camera_pubs[response.source.name].process_data(response)
         except InvalidStateError as e:
             # This path is taken if the image proto has not been returned yet
@@ -157,6 +187,52 @@ class SpotImageServer(Node):
             self.get_logger().warn(f'Image future returned with no images to process: {e}')
         except Exception as e:
             self.get_logger().warn(f'Unknown error in image callback: {e}')
+
+    @staticmethod
+    def _fps_new_bucket() -> dict:
+        return {'count': 0, 'bytes': 0, 'lat_sum': 0.0, 'lat_max': 0.0}
+
+    def _fps_record(self, response: ImageResponseProto) -> None:
+        """Phase 0 instrumentation (opt-in). Accumulates per-source SDK
+        round-trip latency, frame count, and byte volume; emits one throttled
+        summary per window. Pure logging — does not alter request/publish flow."""
+        now = time.monotonic()
+        source = response.source.name
+        nbytes = len(response.shot.image.data)
+        with self._fps_lock:
+            send_t = self._fps_send_times.pop(source, None)
+            st = self._fps_stats[source]
+            st['count'] += 1
+            st['bytes'] += nbytes
+            if send_t is not None:
+                lat = now - send_t
+                st['lat_sum'] += lat
+                st['lat_max'] = max(st['lat_max'], lat)
+            elapsed = now - self._fps_window_start
+            if elapsed < self._fps_window_sec:
+                return
+            # Window elapsed: snapshot and reset under the lock.
+            stats = self._fps_stats
+            self._fps_stats = defaultdict(self._fps_new_bucket)
+            self._fps_window_start = now
+
+        # Format + log outside the lock.
+        total_bytes = sum(s['bytes'] for s in stats.values())
+        lines = [
+            f'[fps-debug] {elapsed:.1f}s window | '
+            f'{total_bytes / elapsed / 1e6:.1f} MB/s total across '
+            f'{len(stats)} active stream(s)'
+        ]
+        for src in sorted(stats):
+            s = stats[src]
+            hz = s['count'] / elapsed
+            avg_ms = (s['lat_sum'] / s['count'] * 1e3) if s['count'] else 0.0
+            max_ms = s['lat_max'] * 1e3
+            mbps = s['bytes'] / elapsed / 1e6
+            lines.append(
+                f'  {src:<32} {hz:5.1f} Hz | lat avg {avg_ms:6.0f} ms '
+                f'max {max_ms:6.0f} ms | {mbps:5.1f} MB/s')
+        self.get_logger().info('\n'.join(lines))
 
     def list_sources_callback(self, req: Trigger.Request, resp: Trigger.Response) -> Trigger.Response:
         resp.message = ' '.join([f'[{name}]' for name in self.image_requests.keys()])
