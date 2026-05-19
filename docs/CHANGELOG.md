@@ -51,6 +51,14 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 ### Planned — Phase 5 (decouple conversion + executor tuning)
 - Byte-aware bounded queue + worker pool for `getImageMsg`/publish; re-tune `num_threads` last.
 
+## [Merge] origin/devel - 2026-05-19
+
+Merged `origin/devel` (45 commits ahead of stale `main`; non-destructive merge, no force-push) into `fix/camera-fps-rosbag-10hz`.
+
+- Single conflict (`image_server.py` `CameraPub.__init__`, devel `6e0b838`). Resolved by combining devel's `QoSProfile(RELIABLE, KEEP_LAST, depth=1)` with the Phase 2 compressed publisher + `active_pub` — the RELIABLE depth=1 profile is now applied to **all** image publishers including `compressed_pub`.
+- **Behavioral change:** image/compressed/info QoS is now RELIABLE depth=1 (was BEST_EFFORT). **Invalidates the prior Phase 0 baseline** — re-measure on the merged branch (flagged in `docs/measurements/2026-05-19-phase0-baseline.md`).
+- Also pulls devel infra unrelated to our files (reentrant callback groups for other sensors, sim, nav TF fix, etc.). Suite `13 passed, 4 skipped`; `py_compile` clean; no conflict markers; no stray `qos_profile_sensor_data`.
+
 ## [Docs] - 2026-05-19
 
 ### Added

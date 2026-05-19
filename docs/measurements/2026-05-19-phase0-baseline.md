@@ -1,5 +1,13 @@
 # Phase 0 baseline — on-robot measurement (2026-05-19)
 
+> ⚠️ **Re-measure required after the `origin/devel` merge.** All numbers below
+> were captured on **BEST_EFFORT** image QoS. devel commit `6e0b838` changes
+> image/compressed/info publishers to **RELIABLE, KEEP_LAST depth=1**. RELIABLE
+> delivery over a saturated WiFi link can itself change latency/throughput
+> (possibly improve subscriber compatibility, possibly add backpressure). The
+> single-stream and all-camera baselines, and the Phase 2 success targets,
+> must be **re-validated on the merged branch** before drawing conclusions.
+
 Captured on the real robot with `SPOT_IMAGE_SERVER_FPS_DEBUG=1` (branch
 `fix/camera-fps-rosbag-10hz` @ `b31edc1`, timestamp-race fix included → latency
 numbers authoritative). Resolves the PLAN's deferred Phase 2-vs-3 decision.

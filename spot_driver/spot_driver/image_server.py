@@ -10,7 +10,7 @@ from collections import defaultdict
 
 import rclpy
 import rclpy.logging
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from rclpy.node import Node
 from rclpy.timer import Timer
 from rclpy.time import Time
@@ -39,16 +39,28 @@ class CameraPub():
         self.parent = parent
         self.lease_manager = parent.lease_manager
         self.compressed = compressed
-        self.info_pub = parent.create_publisher(CameraInfo, '~/' + namespace + '/camera_info', qos_profile=qos_profile_sensor_data)
+
+        # devel (6e0b838): RELIABLE + KEEP_LAST depth=1 — RELIABLE for
+        # compatibility with the image->pointcloud convertor and other
+        # subscribers, depth=1 to stay WiFi-stable (effectively BEST_EFFORT
+        # latency). Merge resolution: apply the SAME profile to the Phase 2
+        # compressed publisher too, for consistency.
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+
+        self.info_pub = parent.create_publisher(CameraInfo, '~/' + namespace + '/camera_info', qos_profile=qos_profile)
         if compressed:
             # Phase 2: source requested FORMAT_JPEG -> publish the CORRECT
             # message type. Consumers needing raw use the standard
             # `image_transport republish compressed raw` node (no extra
             # robot->driver WiFi cost). No raw Image publisher here.
             self.image_pub = None
-            self.compressed_pub = parent.create_publisher(CompressedImage, '~/' + namespace + '/image/compressed', qos_profile=qos_profile_sensor_data)
+            self.compressed_pub = parent.create_publisher(CompressedImage, '~/' + namespace + '/image/compressed', qos_profile=qos_profile)
         else:
-            self.image_pub = parent.create_publisher(Image, '~/' + namespace + '/image', qos_profile=qos_profile_sensor_data) # BEST_EFFORT reliability
+            self.image_pub = parent.create_publisher(Image, '~/' + namespace + '/image', qos_profile=qos_profile)
             self.compressed_pub = None
 
     @property
