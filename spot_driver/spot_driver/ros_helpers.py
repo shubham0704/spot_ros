@@ -264,6 +264,16 @@ def MsgToSoftwareVersion(msg: SoftwareVersion) -> SoftwareVersionProto:
             patch_level=msg.patch_level
         )
 
+class UnsupportedImageFormatError(Exception):
+    """An ImageResponse cannot be converted into a *valid* sensor_msgs/Image.
+
+    Raised instead of emitting a malformed message — e.g. a JPEG stream on the
+    raw-Image path (which must be a sensor_msgs/CompressedImage, handled in
+    Phase 2), or a FORMAT_RAW image with an unhandled pixel_format. Callers
+    must catch this and skip publishing rather than ship a corrupt/partial
+    frame. See docs/plans/PLAN-spot_ros-camera-fps.md (Phase 1)."""
+
+
 def getImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tuple[Image, CameraInfo, TFMessage]:
     """Takes the image, camera, and TF data and populates the necessary ROS messages
 
@@ -295,13 +305,17 @@ def getImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tu
     image_msg.height = data.shot.image.rows
     image_msg.width = data.shot.image.cols
 
-    # Color/greyscale formats.
-    # JPEG format
+    source_name = data.source.name
+
+    # JPEG cannot be a sensor_msgs/Image: an 'rgb8' Image must hold
+    # height*step raw bytes, not a compressed bitstream. Publishing JPEG
+    # correctly (as sensor_msgs/CompressedImage) is Phase 2; here we reject
+    # it so we never emit a corrupt message.
     if data.shot.image.format == image_pb2.Image.FORMAT_JPEG:
-        image_msg.encoding = "rgb8"
-        image_msg.is_bigendian = True
-        image_msg.step = 3 * data.shot.image.cols
-        image_msg.data = data.shot.image.data
+        raise UnsupportedImageFormatError(
+            f"Source '{source_name}' returned FORMAT_JPEG on the raw-Image "
+            f"path. JPEG must be published as sensor_msgs/CompressedImage "
+            f"(Phase 2); refusing to emit a malformed rgb8 Image.")
 
     # Uncompressed.  Requires pixel_format.
     elif data.shot.image.format == image_pb2.Image.FORMAT_RAW:
@@ -341,9 +355,25 @@ def getImageMsg(data: ImageResponseProto, lease_manager: SpotLeaseManager) -> Tu
             image_msg.step = 2 * data.shot.image.cols
             image_msg.data = data.shot.image.data
 
-    elif data.shot.image.format == image_pb2.Image.PIXEL_FORMAT_UNKNOWN:
-        lease_manager.logger.error('Unknown image format from Spot SDK.', throttle_duration_sec=5.0)
-        return Image(), CameraInfo(), tf_msg
+        # FORMAT_RAW but a pixel_format we don't map: do NOT fall through
+        # leaving a half-filled Image (no encoding/step/data).
+        else:
+            lease_manager.logger.error(
+                f"Source '{source_name}': unhandled FORMAT_RAW pixel_format "
+                f"{data.shot.image.pixel_format}.", throttle_duration_sec=5.0)
+            raise UnsupportedImageFormatError(
+                f"Source '{source_name}': unhandled FORMAT_RAW pixel_format "
+                f"{data.shot.image.pixel_format}.")
+
+    # Any other image format (the prior code mistakenly compared .format to a
+    # pixel_format enum here and returned empty messages).
+    else:
+        lease_manager.logger.error(
+            f"Source '{source_name}': unsupported image format "
+            f"{data.shot.image.format}.", throttle_duration_sec=5.0)
+        raise UnsupportedImageFormatError(
+            f"Source '{source_name}': unsupported image format "
+            f"{data.shot.image.format}.")
 
     camera_info_msg = CameraInfo(d=[0.0]*5,
                                  distortion_model="plumb_bob",

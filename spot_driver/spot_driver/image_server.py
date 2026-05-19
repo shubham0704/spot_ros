@@ -29,7 +29,7 @@ from bosdyn.client.frame_helpers import get_a_tform_b, BODY_FRAME_NAME, HAND_FRA
 from spot_msgs.srv import GetImages
 from spot_driver.image_server_parameters import spot_driver_parameters
 
-from .ros_helpers import getImageMsg, populateTransformStamped, TimestampToMsg
+from .ros_helpers import getImageMsg, populateTransformStamped, TimestampToMsg, UnsupportedImageFormatError
 from .spot_body_wrapper import SpotLeaseManager
 from .type_hint_helpers import *
 
@@ -47,7 +47,13 @@ class CameraPub():
                           self.info_pub.get_subscription_count() > 0)
         
         if has_subscribers:
-            image_msg, camera_info_msg, _ = getImageMsg(data, self.lease_manager)
+            try:
+                image_msg, camera_info_msg, _ = getImageMsg(data, self.lease_manager)
+            except UnsupportedImageFormatError as e:
+                # Never publish a malformed/partial Image; skip this frame.
+                self.parent.get_logger().warn(
+                    f'Skipping frame: {e}', throttle_duration_sec=5.0)
+                return
             self.image_pub.publish(image_msg)
             self.info_pub.publish(camera_info_msg)
 
@@ -76,8 +82,17 @@ class SpotImageServer(Node):
         except Exception as e:
             raise RuntimeError(f'Unable to create image client: {e}')
 
-        # Initialize Boston Dynamics image services
-        self.image_requests: dict[str, ImageRequestProto] = {}
+        # Initialize Boston Dynamics image services.
+        # The request map is SPLIT by consumer so that later phases can change
+        # the periodic-publish transport (e.g. JPEG in Phase 2) WITHOUT
+        # affecting the GetImages service or static-TF fetch, which must stay
+        # FORMAT_RAW. Phase 1 keeps both RAW (no behavior change); only
+        # `publish_requests` is ever retargeted in Phase 2.
+        #   publish_requests : consumed by periodic timers (update_image_task)
+        #   service_requests : consumed by GetImages service, static-TF fetch,
+        #                      and the registered-source listing (canonical set)
+        self.publish_requests: dict[str, ImageRequestProto] = {}
+        self.service_requests: dict[str, ImageRequestProto] = {}
 
         # Bookkeeping of image tasks on the ROS side
         self.camera_pubs: dict[str, CameraPub] = {}
@@ -115,8 +130,16 @@ class SpotImageServer(Node):
             rgb_source, depth_source = self.resolve_source_name(image_source)
 
             rgb_pixel_format = image_pb2.Image.PIXEL_FORMAT_RGB_U8 if image_source != 'hand_tof' else None
-            self.image_requests[rgb_source] = build_image_request(rgb_source, image_format=image_pb2.Image.FORMAT_RAW, pixel_format=rgb_pixel_format)
-            self.image_requests[depth_source] = build_image_request(depth_source, image_format=image_pb2.Image.FORMAT_RAW)
+
+            # Service / static-TF always use RAW (must not change in later phases).
+            self.service_requests[rgb_source] = build_image_request(rgb_source, image_format=image_pb2.Image.FORMAT_RAW, pixel_format=rgb_pixel_format)
+            self.service_requests[depth_source] = build_image_request(depth_source, image_format=image_pb2.Image.FORMAT_RAW)
+
+            # Periodic-publish requests: distinct objects (RAW in Phase 1).
+            # Phase 2 will retarget the RGB entry here to FORMAT_JPEG; depth
+            # stays RAW. hand_tof is excluded from JPEG (Phase 2).
+            self.publish_requests[rgb_source] = build_image_request(rgb_source, image_format=image_pb2.Image.FORMAT_RAW, pixel_format=rgb_pixel_format)
+            self.publish_requests[depth_source] = build_image_request(depth_source, image_format=image_pb2.Image.FORMAT_RAW)
 
             rgb_rate = self.params.rates.get_entry(image_source).rgb
             depth_rate = self.params.rates.get_entry(image_source).depth
@@ -167,7 +190,7 @@ class SpotImageServer(Node):
             is_active_topic = self.camera_pubs[source_name].image_pub.get_subscription_count() > 0 or self.camera_pubs[source_name].info_pub.get_subscription_count() > 0
             if not is_active_topic: return
             
-            self.image_response_futures[source_name] = self.image_client.get_image_async([self.image_requests[source_name]])
+            self.image_response_futures[source_name] = self.image_client.get_image_async([self.publish_requests[source_name]])
             self.image_response_futures[source_name].add_done_callback(self.publish_image_callback)
             if self._fps_debug:
                 with self._fps_lock:
@@ -235,7 +258,7 @@ class SpotImageServer(Node):
         self.get_logger().info('\n'.join(lines))
 
     def list_sources_callback(self, req: Trigger.Request, resp: Trigger.Response) -> Trigger.Response:
-        resp.message = ' '.join([f'[{name}]' for name in self.image_requests.keys()])
+        resp.message = ' '.join([f'[{name}]' for name in self.service_requests.keys()])
         resp.success = True
         return resp
 
@@ -244,13 +267,13 @@ class SpotImageServer(Node):
 
         # Make sure the provided sources were registered on startup
         for source in req.sources:
-            if source not in self.image_requests.keys():
-                self.get_logger().warn(f'Provided image source {source} does not exist. Registered sources are {self.image_requests.keys()}')
+            if source not in self.service_requests.keys():
+                self.get_logger().warn(f'Provided image source {source} does not exist. Registered sources are {self.service_requests.keys()}')
                 return resp
 
-        # Request the images from the robot 
+        # Request the images from the robot
         try:
-            image_responses = self.image_client.get_image([self.image_requests[source] for source in req.sources])
+            image_responses = self.image_client.get_image([self.service_requests[source] for source in req.sources])
             for response in image_responses:
                 if response.status != image_pb2.ImageResponse.Status.STATUS_OK:
                     self.get_logger().warn(f'Unable to retrieve image from {response.source.name}')
@@ -270,6 +293,8 @@ class SpotImageServer(Node):
             self.get_logger().warn(f'Provided image source does not exist: {e}')
         except (SourceDataError, UnsetStatusError, ImageDataError) as e:
             self.get_logger().warn(f'Unable to retrive image from robot: {e}')
+        except UnsupportedImageFormatError as e:
+            self.get_logger().warn(f'Unsupported image format from robot: {e}')
 
         return resp
 
@@ -282,13 +307,13 @@ class SpotImageServer(Node):
         if hasattr(self, 'static_tf_timer'):
             self.static_tf_timer.cancel()  # Make it oneshot
 
-        if not self.image_requests:
+        if not self.service_requests:
             self.get_logger().info('No image requests to broadcast transforms')
             return
 
         transform_map = {}  # key: (parent_frame_id, child_frame_id) -> value: TransformStamped
 
-        for response in self.image_client.get_image(list(self.image_requests.values())):
+        for response in self.image_client.get_image(list(self.service_requests.values())):
             image_data = response  # ImageResponseProto
 
             all_tfs_from_data = image_data.shot.transforms_snapshot.child_to_parent_edge_map

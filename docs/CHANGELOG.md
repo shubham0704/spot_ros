@@ -13,9 +13,12 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 - Measurement protocol: with it enabled, run `ros2 topic hz <topic>` for one camera, then for all cameras + `rosbag record`, on real robot WiFi; compare the logged per-source Hz / latency / MB/s to classify latency-bound vs bandwidth-bound.
 - Tests: `spot_driver/tests/test_fps_debug_accounting.py` (accounting, window flush/reset, missing-send-time, bucket independence).
 
-### Planned — Phase 1 (prerequisite, low risk)
-- Split shared `image_server.py` `self.image_requests` into separate publish vs `GetImages`/static-TF request maps.
-- Guard `ros_helpers.py:300-304`: never emit `rgb8` `Image` for JPEG; `getImageMsg` rejects unsupported formats (no partial messages).
+### Added — Phase 1 (prerequisite, low risk) — DONE (review-ready)
+- Split `image_server.py` `self.image_requests` → `self.publish_requests` (periodic timers) + `self.service_requests` (GetImages service, static-TF fetch, source listing). Both FORMAT_RAW in Phase 1 → **no behavior change**; only `publish_requests` is retargeted in Phase 2.
+- `ros_helpers.py`: added `UnsupportedImageFormatError`; `getImageMsg` now **raises** for JPEG-on-raw-path, unhandled FORMAT_RAW pixel_format, and any other format (previously emitted a malformed `rgb8` Image or a half-filled/empty Image). Also fixes the latent bug where `.format` was compared to a `pixel_format` enum.
+- Both call sites guarded: `CameraPub.process_data` skips the frame (throttled warn) instead of publishing garbage; `get_image_callback` returns failure with a clear log.
+- Tests: `spot_driver/tests/test_phase1_request_map_split.py` (5, dependency-free AST), `spot_driver/tests/test_phase1_format_guard.py` (behavior; skips where rclpy/bosdyn absent).
+- Detailed implementation notes: `docs/plans/IMPL-spot_ros-camera-fps.md`.
 
 ### Planned — Phase 2 (compressed RGB transport, coexisting)
 - Config flag (default RAW) to request `FORMAT_JPEG` RGB; publish `sensor_msgs/CompressedImage` on `<ns>/image/compressed` alongside RAW. `hand_tof` excluded. Depth stays RAW.
