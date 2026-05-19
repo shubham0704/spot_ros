@@ -14,6 +14,7 @@ each session.
 | `field-card.md` | One-page during-recording checklist | Open / print at the start of every session (reference) |
 | `preflight_check.sh` | Verifies topics, rates, services, disk, env | Run **once at session start** + after any robot/launch change |
 | `metadata_template.yaml` | Fillable per-episode metadata | Copy into every episode dir; fill *during* recording, not after |
+| `topics.md` | Authoritative list of topics to record (verified against branch source) | Reference when building the record command; preflight already prints a curated version |
 
 ## Workflow at a glance
 

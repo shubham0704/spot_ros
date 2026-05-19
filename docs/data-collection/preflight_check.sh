@@ -124,25 +124,58 @@ fi
 
 # ----- 7. Non-image topics — discover-and-report -----------------------------
 hdr "Non-image topics (discover & verify on this robot)"
+# Patterns verified against spot_driver/spot_driver/spot_ros.py source
+# (node name "spot_driver" → /spot_driver/* prefix). Last value "optional"
+# means a WARN is informational rather than a real problem.
 declare -A NEEDED_PATTERNS=(
   ["tf"]="^/tf$"
   ["tf_static"]="^/tf_static$"
-  ["joint_states"]="joint_states"
-  ["odom"]="(^|/)odom$"
-  ["battery"]="battery"
-  ["imu"]="(^|/)imu"
+  ["joint_states"]="^/spot_driver/joint_states$"
+  ["odometry"]="^/spot_driver/odometry$"
+  ["battery_states"]="^/spot_driver/status/battery_states$"
+  ["feet"]="^/spot_driver/status/feet$"
+  ["power_state"]="^/spot_driver/status/power_state$"
+  ["cmd_vel"]="^/spot_driver/cmd_vel$"
+  ["wifi"]="^/spot_driver/status/wifi$"
 )
-for key in tf tf_static joint_states odom battery imu; do
+for key in tf tf_static joint_states odometry battery_states feet power_state cmd_vel wifi; do
   pat="${NEEDED_PATTERNS[$key]}"
   match=$(echo "$TOPICS" | grep -E "$pat" || true)
   if [ -n "$match" ]; then
-    pass "$key found: $(echo "$match" | tr '\n' ' ')"
+    pass "$key found: $match"
   else
-    warn "$key NOT found by pattern '$pat' — verify the bringup launch publishes it; rename in record list if needed"
+    warn "$key NOT found by pattern '$pat' — confirm bringup launched spot_driver and the node name matches"
   fi
 done
-info "Effort/current (energy signal) — verify with: ros2 topic echo \$(echo \"\$TOPICS\" | grep joint_states | head -1) --once"
-info "  Confirm 'effort' field is populated (Spot often leaves it empty; if so, find a current/power topic)."
+
+# IMU is intentionally listed as informational — spot_driver in this branch
+# does NOT publish an /imu topic (verified in source). Stability comes from
+# odometry twist + status/feet.
+IMU_MATCH=$(echo "$TOPICS" | grep -Ei "(^|/)imu" || true)
+if [ -n "$IMU_MATCH" ]; then
+  info "IMU topic(s) present (external): $IMU_MATCH"
+else
+  info "No IMU topic — expected (spot_driver does not publish one in this branch). Use odom twist + status/feet for stability."
+fi
+
+# Lidar / point cloud (conditional on EAP2 payload or filter)
+PC_MATCH=$(echo "$TOPICS" | grep -Ei "(point_?cloud|velodyne|cloud_out)" || true)
+if [ -n "$PC_MATCH" ]; then
+  info "Point-cloud topic(s) present: $PC_MATCH"
+else
+  info "No point-cloud topic detected (OK if lidar payload is not equipped/launched)."
+fi
+
+# SLAM / map (external; not from spot_driver)
+SLAM_MATCH=$(echo "$TOPICS" | grep -Ei "(^/map$|/map_updates|slam|amcl)" || true)
+if [ -n "$SLAM_MATCH" ]; then
+  info "SLAM/map topic(s) present: $SLAM_MATCH"
+else
+  info "No SLAM/map topic detected (only relevant if you're running SLAM/Nav2)."
+fi
+
+info "Effort check (energy signal) — run: ros2 topic echo /spot_driver/joint_states --once"
+info "  Confirm 'effort' field is populated (Spot often leaves it empty; if so, find a current/power topic and record metadata note)."
 
 # ----- 8. rosbag2 + disk -----------------------------------------------------
 hdr "rosbag2 + storage"
@@ -167,10 +200,17 @@ fi
 hdr "Suggested 'ros2 bag record' command for the next episode"
 RECORD_TOPICS=""
 RECORD_TOPICS+=" $RGB_TOPICS $DEPTH_TOPICS $INFO_TOPICS"
-for key in tf tf_static joint_states odom battery imu; do
+for key in tf tf_static joint_states odometry battery_states feet power_state cmd_vel wifi; do
   pat="${NEEDED_PATTERNS[$key]}"
   RECORD_TOPICS+=" $(echo "$TOPICS" | grep -E "$pat" | tr '\n' ' ')"
 done
+# Add the spot_driver status topics that aren't in NEEDED_PATTERNS but are
+# useful to record (faults, mobility, feedback, dock, leases, estop):
+for extra in "status/system_faults" "status/behavior_faults" "status/mobility_params" "status/feedback" "status/dock_state" "status/leases" "status/estop" "odometry/twist"; do
+  RECORD_TOPICS+=" $(echo "$TOPICS" | grep -E "^/spot_driver/${extra}$" | tr '\n' ' ')"
+done
+# Conditional: any point-cloud / lidar topic that's actually live
+RECORD_TOPICS+=" $(echo "$TOPICS" | grep -Ei "(point_?cloud|velodyne|cloud_out)" | tr '\n' ' ')"
 # Compact / dedupe
 RECORD_TOPICS=$(echo "$RECORD_TOPICS" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')
 cat <<EOF
