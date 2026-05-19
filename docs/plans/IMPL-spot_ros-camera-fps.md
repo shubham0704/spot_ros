@@ -25,8 +25,23 @@ baseline; per-source is the correct granularity pre-batching.
 
 **Tests:** pass-or-skip locally (skips without rclpy/bosdyn); run in ROS env.
 
+**Post-review fix (Codex Medium, commit after `78e10e9`):** the send
+timestamp is now recorded *before* the future is created / its callback
+registered, eliminating a race where an already-resolved future could run
+`_fps_record` before the timestamp was stored (which would drop/bias latency
+samples). No publish-path effect. See
+`docs/plans/VALIDATION-spot_ros-camera-fps.md`.
+
+**Known limitation (Codex Low, accepted):** on a failed/empty future
+`_fps_send_times[source]` is not popped. Bounded (overwritten on the source's
+next send); only a source that fails then goes permanently inactive leaves one
+stale entry, and failed requests are not counted in metrics. Not fixed to
+avoid per-request closure cost on the default-disabled hot path; revisit if
+failed-request accounting is needed.
+
 **Remaining:** must be run *on the real robot over WiFi* to produce the
-baseline that resolves the Phase 2-vs-3 ordering decision.
+baseline that resolves the Phase 2-vs-3 ordering decision. Latency numbers are
+authoritative now that the timestamp race is fixed.
 
 ---
 

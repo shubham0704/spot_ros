@@ -20,6 +20,13 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 - Tests: `spot_driver/tests/test_phase1_request_map_split.py` (5, dependency-free AST), `spot_driver/tests/test_phase1_format_guard.py` (behavior; skips where rclpy/bosdyn absent).
 - Detailed implementation notes: `docs/plans/IMPL-spot_ros-camera-fps.md`.
 
+### Fixed — post-Codex-review (Phase 0)
+- fps-debug timestamp race (Codex Medium): send time is now captured before the SDK future/callback is created, so latency samples can't be lost to an already-resolved future. No publish-path change. Validation: `docs/plans/VALIDATION-spot_ros-camera-fps.md`.
+- Known accepted limitation (Codex Low): failed/empty futures don't pop `_fps_send_times` (bounded; documented in IMPL doc).
+
+### Added
+- `docs/plans/VALIDATION-spot_ros-camera-fps.md` — Codex Step 6 review of the Phase 0+1 implementation (verdict: safe to deploy/test on robot for normal RAW operation).
+
 ### Planned — Phase 2 (compressed RGB transport, coexisting)
 - Config flag (default RAW) to request `FORMAT_JPEG` RGB; publish `sensor_msgs/CompressedImage` on `<ns>/image/compressed` alongside RAW. `hand_tof` excluded. Depth stays RAW.
 

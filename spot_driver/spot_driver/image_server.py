@@ -190,11 +190,17 @@ class SpotImageServer(Node):
             is_active_topic = self.camera_pubs[source_name].image_pub.get_subscription_count() > 0 or self.camera_pubs[source_name].info_pub.get_subscription_count() > 0
             if not is_active_topic: return
             
-            self.image_response_futures[source_name] = self.image_client.get_image_async([self.publish_requests[source_name]])
-            self.image_response_futures[source_name].add_done_callback(self.publish_image_callback)
+            # Record the send time BEFORE the future exists / its callback is
+            # registered. Otherwise an already-resolved (or immediately
+            # resolving) future can run publish_image_callback -> _fps_record
+            # on another thread before this timestamp is stored, losing the
+            # latency sample. (Codex review: medium.)
             if self._fps_debug:
                 with self._fps_lock:
                     self._fps_send_times[source_name] = time.monotonic()
+            future = self.image_client.get_image_async([self.publish_requests[source_name]])
+            self.image_response_futures[source_name] = future
+            future.add_done_callback(self.publish_image_callback)
 
     def publish_image_callback(self, response_future: Future):
         try:
