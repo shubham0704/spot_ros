@@ -51,6 +51,19 @@ Plan v2 **signed off by principal** 2026-05-19. Phases land as separate, indepen
 ### Planned — Phase 5 (decouple conversion + executor tuning)
 - Byte-aware bounded queue + worker pool for `getImageMsg`/publish; re-tune `num_threads` last.
 
+## [Data collection] - 2026-05-19
+
+Operator-facing collection workflow tied to this branch's instrumentation:
+
+### Added
+- `docs/data-collection/README.md` — index + workflow summary; explains why per-episode `fps-debug` logging is non-optional.
+- `docs/data-collection/operator-deck.md` — 10-slide operator briefing deck grounded in the spot_ros stack (real `/spot_image_server/...` topics, env-var workflow, the 5 motion primitives incl. `base_yaw_scan`).
+- `docs/data-collection/field-card.md` — one-page during-recording checklist (env, per-episode steps, stop conditions, primitives cheat-sheet, bag naming).
+- `docs/data-collection/metadata_template.yaml` — required per-episode metadata; `fps_debug_summary` and `quarantine` fields make the dataset filterable.
+- `docs/data-collection/preflight_check.sh` — verifies node/services/topics/Hz/disk/env, prints a curated `ros2 bag record` command using only discovered topics, fails loudly on critical conditions.
+
+Closes the loop: Phase 0 `fps-debug` becomes the per-episode quality gate; Phase 2 JPEG mode is the recommended collection transport (bandwidth-stable, makes episodes comparable). Non-image topic names (joint_states/odom/battery/tf) are intentionally not hardcoded — `preflight_check.sh` discovers them on the actual robot.
+
 ## [Merge] origin/devel - 2026-05-19
 
 Merged `origin/devel` (45 commits ahead of stale `main`; non-destructive merge, no force-push) into `fix/camera-fps-rosbag-10hz`.

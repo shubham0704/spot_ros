@@ -1,0 +1,43 @@
+# One file per episode. Copy into bags/<route_id>/<behavior>/rep_<NN>/.
+# Fill DURING or IMMEDIATELY AFTER recording. Don't trust memory at end of day.
+
+# --- Identity ---
+route_id:         # e.g. route_A_corridor
+behavior:         # base_slow | base_normal | base_fast | static_arm_scan |
+                  # base_plus_arm_scan | base_yaw_scan | base_yaw_plus_arm_scan
+repeat_id:        # rep_01, rep_02, ...
+date:             # YYYY-MM-DD
+operator:         # name / initials
+robot:            # robot serial / nickname
+
+# --- Behavior detail ---
+speed_level:      # slow | normal | fast | n/a
+arm_scan_pattern: # center-mid,left-mid,right-mid,center-low,center-high  | n/a
+yaw_pattern:      # 90 | 180 | 360 | n/a
+notes:            # one-liner if anything unusual
+
+# --- Image transport (CRITICAL for analysis) ---
+image_transport:  # raw | jpeg
+jpeg_quality:     # 75 (default) — only if image_transport: jpeg
+cameras_enabled:  # [frontleft, frontright, left, right, back, hand_rgb, hand_tof]
+
+# Paste 2-3 representative [fps-debug] windows from the spot_image_server
+# log (per-source Hz / avg latency / MB/s). This is what later filters
+# bandwidth-degraded episodes; do NOT skip.
+fps_debug_summary: |
+  # e.g.
+  # [fps-debug] 5.0s window | 5.7 MB/s total across 2 active stream(s)
+  #   back_fisheye_image      3.1 Hz | lat avg 261 ms max 327 ms | 2.9 MB/s
+  #   frontright_fisheye_image 3.1 Hz | lat avg 262 ms max 318 ms | 2.9 MB/s
+
+# --- Environment / context ---
+environment_notes:  # lighting, clutter changes, people present, etc.
+battery_start:      # %
+battery_end:        # %
+slam_running:       # true | false (and which SLAM if applicable)
+launch_config:      # publish_all_images.yaml / custom — what was passed to bringup
+
+# --- Quality flags ---
+known_anomalies:    # free text — wall bump, slip, person crossing, SLAM glitch
+quarantine: false   # set true if a stop condition triggered or data is suspect
+                    # quarantined bags are kept on disk; analysis excludes them
