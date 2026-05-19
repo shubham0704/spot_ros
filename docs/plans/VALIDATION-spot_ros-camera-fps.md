@@ -161,3 +161,59 @@ format-guard tests cover the RAW encodings/raises).
 > request-map isolation and raw-default compatibility look correct.
 
 Deploy-blocker (HIGH) is now fixed; all other items resolved or mitigated.
+
+---
+
+# VALIDATION: Merge sanity (origin/devel)
+
+Reviewer: Codex (gpt-5.5), Date: 2026-05-19
+Reviewed merge: `341c896` (parents `a9223b3` = pre-merge Phase-2 tip, and
+`15f5b78` = origin/devel). Relevant devel commit: `6e0b838`.
+Provenance: read-only sandbox blocked Codex's append; transcribed from stdout
+by Claude (see [[feedback-codex-exec-gotchas]]).
+
+## Verdict: NO BLOCKERS — safe to build and test on the robot.
+
+## Confirmations
+- **Conflict resolution correct.** vs `a9223b3`: `ros_helpers.py` has *no
+  diff* (our work untouched by devel); `image_server.py` changes only the
+  publisher-QoS integration. `QoSProfile(RELIABLE, KEEP_LAST, depth=1)` now on
+  camera_info, raw image, and Phase 2 compressed publishers. Preserves devel
+  `6e0b838` intent (RELIABLE-subscriber compatibility, e.g. the
+  image→pointcloud path). Applying RELIABLE depth=1 to `CompressedImage` is the
+  right choice (RELIABLE pub works with BEST_EFFORT subs; BEST_EFFORT compressed
+  would recreate devel's compat problem for republish/rosbag).
+- **All Phase 0/1/2 code survived intact** (fps-debug, request-map split,
+  `UnsupportedImageFormatError` guard, `getCompressedImageMsg`, `active_pub`,
+  JPEG opt-in/hand_tof-exclusion/depth-service-TF-RAW) — line-ref confirmed.
+- **Semantic devel interactions clean:** of the 45 devel commits, only
+  `6e0b838` touches the real image server. devel's reentrant-callback-group
+  change `00c7f7e` is **simulation-only**; the real image server still uses
+  per-timer `MutuallyExclusiveCallbackGroup` + `MultiThreadedExecutor(4)`.
+  No devel change touched `image_server_parameters.yaml`/`setup.py`. Nav/sim
+  commits don't affect camera FPS.
+- No conflict markers / unresolved files.
+
+## Low findings & resolutions
+1. **RELIABLE depth=1 is a validation hazard, not a merge bug** — can add DDS
+   backpressure with slow/remote subscribers; fps-debug times SDK arrival
+   (pre-publish). → Already flagged: re-baseline on `341c896` and compare
+   fps-debug vs `ros2 topic hz`/rosbag delivery. No action beyond the existing
+   re-test requirement.
+2. **CHANGELOG wording inaccuracy (Claude-introduced)** — the merge entry said
+   "no stray `qos_profile_sensor_data`" globally, but `spot_ros.py:41,811,812`
+   legitimately still uses it. → **FIXED**: wording corrected to scope the
+   claim to `image_server.py`.
+
+## Note (not a blocker)
+`git diff --check 341c896^1 341c896` flags trailing whitespace in unrelated
+devel-added sim/nav/docs files (not ours). Irrelevant to camera runtime;
+relevant only if CI enforces whitespace — out of scope for this branch.
+
+## Robot revalidation required (unchanged)
+1. RAW/default on `341c896`: re-run single + all-camera Phase 0 fps-debug
+   under RELIABLE depth=1.
+2. `SPOT_IMAGE_SERVER_RGB_JPEG=1`: RGB-compressed throughput/Hz + verify
+   `image_transport republish compressed raw`.
+3. Keep launch composition comparable (devel nav/sim changes can add unrelated
+   load if newly enabled).
