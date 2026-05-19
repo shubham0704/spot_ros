@@ -41,6 +41,33 @@ This repository houses the collection of packages required to run the Spot robot
 
    Depending on your desired communication configuration, you may want to set a DDS middleware configuration like `cyclonedds`. To do this, create your configuration file and set the required environment variables to your `~/.bashrc`.
 
+5. **Image Server — opt-in transport & instrumentation (optional, all default OFF)**
+
+   The `spot_image_server` node reads three optional environment variables. Default behavior is unchanged from before; set these only when you want the corresponding feature.
+
+   | Variable | Default | What it does |
+   |---|---|---|
+   | `SPOT_IMAGE_SERVER_FPS_DEBUG` | off | Logs a per-source windowed summary (achieved Hz, mean/max SDK round-trip latency, MB/s) every 5 s. Pure logging, no behavior change. Use it to detect bandwidth-bound episodes during rosbag recording. |
+   | `SPOT_IMAGE_SERVER_FPS_DEBUG_WINDOW` | `5.0` | Summary window length in seconds (only honored when `..._FPS_DEBUG` is on). |
+   | `SPOT_IMAGE_SERVER_RGB_JPEG` | off | RGB sources (except `hand_tof`) request `FORMAT_JPEG` from the robot and are published as `sensor_msgs/CompressedImage` on `~/<source>/image/compressed` **instead of** raw `Image` on `~/<source>/image`. Depth, the `~/get_images` service, and static-TF stay RAW (unchanged). Cuts RGB bandwidth ~10–20× — essential when many cameras are recorded simultaneously over WiFi. |
+   | `SPOT_IMAGE_SERVER_JPEG_QUALITY` | `75` | JPEG `quality_percent` passed to the Spot SDK. Range `[1, 100]`; out-of-range values are clamped with a warning. Only honored when `..._RGB_JPEG` is on. |
+
+   Enable them in the shell **before** launching:
+   ```bash
+   export SPOT_IMAGE_SERVER_FPS_DEBUG=1                   # measurement / data-collection
+   export SPOT_IMAGE_SERVER_RGB_JPEG=1                    # compressed RGB transport
+   export SPOT_IMAGE_SERVER_JPEG_QUALITY=75               # optional tuning
+   ```
+
+   **When `..._RGB_JPEG` is on, the raw `~/<source>/image` topic for RGB sources is NOT published** (depth raw topics are unchanged). Consumers that need raw RGB while compression is on should run the standard `image_transport` republisher:
+   ```bash
+   ros2 run image_transport republish compressed raw \
+        --ros-args -r in/compressed:=/spot_image_server/rgb/<cam>/image/compressed \
+                   -r out:=/spot_image_server/rgb/<cam>/image
+   ```
+   This decodes in a dedicated process and does **not** re-cost the robot→driver WiFi link.
+
+   Why this exists: on-robot measurement showed `~6 MB/s aggregate WiFi ceiling`; with all cameras RAW + a rosbag subscriber active, per-stream rates collapse to ~3 Hz with ~290 ms latency. The full root-cause analysis, plan, and baseline are in `docs/plans/PLAN-spot_ros-camera-fps.md`, `docs/measurements/2026-05-19-phase0-baseline.md`, and `docs/camera-fps-explainer.md`.
 
 ### Driver Launch Commands
 To launch the driver for Spot, execute the following command in a terminal:
