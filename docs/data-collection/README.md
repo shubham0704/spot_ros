@@ -10,7 +10,8 @@ each session.
 | File | Purpose | When to use |
 |---|---|---|
 | `operator-deck.md` | 10-slide deck explaining the experiment | First-time briefing of an operator |
-| `field-card.md` | One-page during-recording checklist | Open / print at the start of every session |
+| `protocol.md` | **Simple per-episode loop** (teleop) | The thing the operator follows for every episode |
+| `field-card.md` | One-page during-recording checklist | Open / print at the start of every session (reference) |
 | `preflight_check.sh` | Verifies topics, rates, services, disk, env | Run **once at session start** + after any robot/launch change |
 | `metadata_template.yaml` | Fillable per-episode metadata | Copy into every episode dir; fill *during* recording, not after |
 
